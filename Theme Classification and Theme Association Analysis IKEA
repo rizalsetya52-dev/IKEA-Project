@@ -1,0 +1,836 @@
+# 1. Load packages yang dibutuhkan
+library(dplyr)
+library(stringr)
+library(readr)
+
+# 2. Baca file CSV
+asalmuasal <- read_csv("C:/Users/pc/OneDrive/R studio Practice/Scaraping Result/ulasan_ikea_final.csv")
+
+# 3. Lihat struktur data (tipe tiap kolom, contoh isi)
+str(asalmuasal)
+
+# 4. Ringkasan statistik cepat
+summary(asalmuasal)
+
+# 5. Cek jumlah data kosong (NA) di tiap kolom
+colSums(is.na(asalmuasal))
+
+# 6. Cek jumlah baris duplikat
+sum(duplicated(asalmuasal))
+
+# 7. Cek distribusi rating (harusnya cuma angka 1-5)
+table(asalmuasal$rating)
+
+# 8. Cek username yang kepanjangan (indikasi komentar ketuker jadi nama)
+asalmuasal %>% filter(str_length(username) > 30) %>% View()
+
+# 9. # Buka tampilan tabel penuh di tab baru (kayak spreadsheet)
+View(asalmuasal)
+
+# 10. Cek apakah ada spasi berlebih di awal/akhir komentar
+sum(asalmuasal$komentar != trimws(asalmuasal$komentar))
+
+# 11. Intip beberapa komentar terpanjang & terpendek (kadang ada yang aneh isinya)
+asalmuasal %>% arrange(desc(str_length(komentar))) %>% head(3) %>% View()
+asalmuasal %>% arrange(str_length(komentar)) %>% head(3) %>% View()
+
+--------------------------------------------------------------------------------
+## 13 September 2026
+  # Install kalau belum ada (sekali aja)
+  install.packages("tidytext")
+
+library(tidytext)
+library(dplyr)
+library(stringr)
+
+# 1. Pecah tiap komentar jadi kata-kata individual (tokenization)
+kata_kata <- asalmuasal %>%
+  select(komentar) %>%
+  unnest_tokens(word, komentar)
+
+# 2. Hitung frekuensi tiap kata, urutkan dari yang paling sering
+frekuensi_kata <- kata_kata %>%
+  count(word, sort = TRUE)
+
+# 3. Lihat 40 kata paling sering muncul
+head(frekuensi_kata, 30)
+print(frekuensi_kata, n = 40)
+
+asalmuasal %>% 
+  filter(str_detect(komentar, "rumah")) %>% 
+  select(komentar) %>% 
+  head(10) %>% 
+  print()
+
+asalmuasal %>% 
+  filter(str_detect(komentar, "rumah")) %>% 
+  select(komentar) %>% 
+  View()
+
+library(stringr)
+
+komentar_rumah <- asalmuasal %>% 
+  filter(str_detect(komentar, "rumah")) %>% 
+  pull(komentar)
+
+str_view(komentar_rumah, "rumah")
+
+
+install.packages("DT")  # sekali aja kalau belum ada
+
+library(DT)
+library(stringr)
+
+# Bungkus kata "rumah" dengan tag HTML warna merah
+tabel_highlight <- asalmuasal %>%
+  filter(str_detect(komentar, "rumah")) %>%
+  select(komentar) %>%
+  mutate(komentar = str_replace_all(komentar, "(rumah)", "<span style='color:red; font-weight:bold;'>\\1</span>"))
+
+# Tampilkan sebagai tabel HTML (escape=FALSE penting biar tag HTML-nya kebaca, bukan ditampilin sebagai teks biasa)
+datatable(tabel_highlight, escape = FALSE)
+
+--------------------------------------------------------------------------------
+##Visualisasi Word Freq
+
+#OPSI 1
+stopwords_id <- c("dan", "di", "yang", "ada", "juga", "untuk", "ke", "dari",
+                  "ini", "itu", "dengan", "nya", "saya", "kami", "kita",
+                  "atau", "tapi", "tidak", "bisa", "akan", "sudah", "belum",
+                  "jadi", "karena", "saat", "banget", "sih", "ya", "aja",
+                  "kalo", "kalau", "lagi", "pas", "buat", "gak", "ga",
+                  "nggak", "sangat", "lebih", "sama", "pada", "adalah", "yg")
+
+frekuensi_bersih <- frekuensi_kata %>%
+  filter(!word %in% c(stopwords_id, "ikea"))
+
+
+install.packages("wordcloud2")
+library(wordcloud2)
+
+wordcloud2(frekuensi_bersih, size = 0.7)
+-------------------------------------------------------------------------------
+#Opsi 2
+library(tidytext)
+library(dplyr)
+library(stringr)
+library(widyr)
+library(igraph)
+library(ggraph)
+
+# 1. Tambahkan ID unik untuk tiap komentar (baris) SEBELUM tokenisasi
+asalmuasal_id <- asalmuasal %>%
+  mutate(komentar_id = row_number())
+
+# 2. Tokenisasi ulang, sambil bawa kolom komentar_id
+kata_kata_id <- asalmuasal_id %>%
+  select(komentar_id, komentar) %>%
+  unnest_tokens(word, komentar)
+
+# 3. Hitung korelasi antar kata (kata yang sering muncul BARENG di komentar yang sama)
+kata_pairs <- kata_kata_id %>%
+  filter(!word %in% c(stopwords_id, "ikea")) %>%
+  add_count(word) %>%
+  filter(n >= 15) %>%
+  pairwise_cor(word, komentar_id, sort = TRUE)
+
+# 4. Visualisasi network graph
+kata_pairs %>%
+  filter(correlation > 0.2) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(alpha = correlation), show.legend = FALSE) +
+  geom_node_point(color = "lightblue", size = 3) +
+  geom_node_text(aes(label = name), repel = TRUE) +
+  theme_void()
+
+##Pengelompokan Tema
+library(dplyr)
+library(stringr)
+
+# Definisikan kata kunci per tema (hasil finalisasi kita)
+kw_tempat   <- c("tempat", "tempatnya", "luas", "nyaman", "bersih", "parkir")
+kw_produk   <- c("rumah", "barang", "lengkap", "belanja", "perlengkapan", "perabotan")
+kw_makanan  <- c("makan", "makanan", "enak", "minuman")
+kw_harga    <- c("harga", "mahal", "murah", "terjangkau")
+kw_akses    <- c("kota", "umum", "bus", "tol", "akses", "jauh", "bandung", "parahyangan")
+
+# Buat pola regex per tema (gabung kata kunci pakai "|" = OR)
+pola_tempat  <- str_c(kw_tempat, collapse = "|")
+pola_produk  <- str_c(kw_produk, collapse = "|")
+pola_makanan <- str_c(kw_makanan, collapse = "|")
+pola_harga   <- str_c(kw_harga, collapse = "|")
+pola_akses   <- str_c(kw_akses, collapse = "|")
+
+# Tandai tiap komentar - TRUE kalau mengandung minimal 1 kata kunci tema itu
+asalmuasal_tema <- asalmuasal %>%
+  mutate(
+    tema_tempat  = str_detect(str_to_lower(komentar), pola_tempat),
+    tema_produk  = str_detect(str_to_lower(komentar), pola_produk),
+    tema_makanan = str_detect(str_to_lower(komentar), pola_makanan),
+    tema_harga   = str_detect(str_to_lower(komentar), pola_harga),
+    tema_akses   = str_detect(str_to_lower(komentar), pola_akses)
+  )
+
+# Cek hasil - berapa banyak komentar per tema
+colSums(select(asalmuasal_tema, starts_with("tema_")))
+
+
+##Bentuk Visual
+## Tabel
+ringkasan_tema <- data.frame(
+  tema = c("Tempat/Fasilitas", "Produk/Perlengkapan", "Makanan/Food Court", "Harga", "Akses/Lokasi"),
+  jumlah_komentar = colSums(select(asalmuasal_tema, starts_with("tema_"))),
+  persentase = round(colSums(select(asalmuasal_tema, starts_with("tema_"))) / nrow(asalmuasal_tema) * 100, 1)
+)
+
+View(ringkasan_tema)
+
+##Chart
+library(dplyr)
+library(ggplot2)
+library(plotly)
+
+# ringkasan_tema kamu (sesuai kode yang udah ada)
+ringkasan_tema <- data.frame(
+  tema = c("Tempat/Fasilitas", "Produk/Perlengkapan", "Makanan/Food Court", "Harga", "Akses/Lokasi"),
+  jumlah_komentar = colSums(select(asalmuasal_tema, starts_with("tema_"))),
+  persentase = round(colSums(select(asalmuasal_tema, starts_with("tema_"))) / nrow(asalmuasal_tema) * 100, 1)
+)
+
+# ---- bikin plot statis dulu pakai ggplot, urutin dari besar ke kecil ----
+p <- ggplot(ringkasan_tema, aes(x = reorder(tema, persentase), y = persentase,
+                                fill = tema,
+                                text = paste0(tema, "<br>",
+                                              jumlah_komentar, " komentar (",
+                                              persentase, "%)"))) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  labs(title = "Distribusi Tema pada Ulasan IKEA", x = "", y = "Persentase Komentar (%)") +
+  theme_minimal(base_size = 12)
+
+# ---- convert ke interaktif ----
+ggplotly(p, tooltip = "text")
+
+
+
+library(dplyr)
+library(ggplot2)
+
+ringkasan_tema <- data.frame(
+  tema = c("Tempat/Fasilitas", "Produk/Perlengkapan", "Makanan/Food Court", "Harga", "Akses/Lokasi"),
+  jumlah_komentar = colSums(select(asalmuasal_tema, starts_with("tema_"))),
+  persentase = round(colSums(select(asalmuasal_tema, starts_with("tema_"))) / nrow(asalmuasal_tema) * 100, 1)
+)
+
+ggplot(ringkasan_tema, aes(x = reorder(tema, -persentase), y = persentase, fill = tema)) +
+  geom_col(show.legend = FALSE, width = 0.6) +
+  geom_text(aes(label = paste0(persentase, "%\n(", jumlah_komentar, " komentar)")),
+            vjust = -0.3, size = 3.8, fontface = "bold") +
+  scale_fill_manual(values = c("#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B2")) +
+  labs(title = "Distribusi Tema pada Ulasan IKEA", x = "", y = "Persentase Komentar (%)") +
+  ylim(0, max(ringkasan_tema$persentase) * 1.2) +   # kasih ruang ekstra di atas bar biar teks gak kepotong
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1, face = "bold"),
+        plot.title = element_text(face = "bold", hjust = 0.5))
+
+------------------------------------------------------------------------------
+##Pengecekan Random untuk memastikan keraguan  (CARA 1)
+  set.seed(123)  # biar hasil random-nya konsisten kalau di-run ulang
+
+# Ambil 20 komentar acak yang ke-tag tema TEMPAT, buat dicek manual
+sampel_tempat <- asalmuasal_tema %>%
+  filter(tema_tempat == TRUE) %>%
+  slice_sample(n = 20) %>%
+  select(komentar, tema_tempat, tema_produk, tema_makanan, tema_harga, tema_akses)
+
+View(sampel_tempat)
+
+------------------------------------------------------------------------------
+  ##Pengecekan Random untuk memastikan keraguan  (CARA 2)
+  library(dplyr)
+
+# Daftar nama kolom tema & nama tampilannya, urutannya harus sama persis
+kolom_tema <- c("tema_tempat", "tema_produk", "tema_makanan", "tema_harga", "tema_akses")
+nama_tema  <- c("Tempat/Fasilitas", "Produk/Perlengkapan", "Makanan/Food Court", "Harga", "Akses/Lokasi")
+
+# Bikin kolom label_tema: ambil nama tema yang TRUE aja, gabung jadi 1 teks
+asalmuasal_tema$label_tema <- apply(asalmuasal_tema[kolom_tema], 1, function(baris) {
+  paste(nama_tema[baris], collapse = ", ")
+})
+
+# Cek hasilnya
+asalmuasal_tema %>% select(komentar, label_tema) %>% View()
+-------------------------------------------------------------------------------
+### Ini untuk Cek yang kosong alias ga kena TEMA
+  library(dplyr)
+
+# Ambil semua komentar yang label_tema-nya KOSONG (tidak masuk tema manapun)
+tidak_bertema <- asalmuasal_tema %>%
+  filter(label_tema == "") %>%
+  select(komentar)
+
+# Cek berapa banyak
+nrow(tidak_bertema)
+
+# Lihat semua isinya di tabel
+View(tidak_bertema)  
+
+##Ini bantu kita pake garis yang nyambung sama TITIK
+library(tidytext)
+library(dplyr)
+library(stringr)
+library(widyr)
+library(igraph)
+library(ggraph)
+
+# 1. Tambahkan ID unik untuk tiap komentar yang belum bertema
+tidak_bertema_id <- tidak_bertema %>%
+  mutate(komentar_id = row_number())
+
+# 2. Tokenisasi (pecah jadi kata-kata)
+kata_tidak_bertema <- tidak_bertema_id %>%
+  select(komentar_id, komentar) %>%
+  unnest_tokens(word, komentar)
+
+# 3. Hitung korelasi antar kata (turunkan threshold karena datanya cuma 50 komentar, lebih sedikit)
+pairs_tidak_bertema <- kata_tidak_bertema %>%
+  filter(!word %in% c(stopwords_id, "ikea")) %>%
+  add_count(word) %>%
+  filter(n >= 3) %>%  # diturunkan dari 15 ke 3, karena data cuma 50 baris
+  pairwise_cor(word, komentar_id, sort = TRUE)
+
+# 4. Visualisasi
+pairs_tidak_bertema %>%
+  filter(correlation > 0.2) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(alpha = correlation), show.legend = FALSE) +
+  geom_node_point(color = "lightblue", size = 3) +
+  geom_node_text(aes(label = name), repel = TRUE) +
+  theme_void()
+
+--------------------------------------------------------------------------------
+### Kita Sentiment Pake InSet Lexicon (Fajri Koto)
+library(dplyr)
+library(stringr)
+library(readr)
+
+# Download ulang tanpa maksa nama kolom manual - biarkan pakai header asli file
+positif <- read_tsv("https://raw.githubusercontent.com/fajri91/InSet/master/positive.tsv")
+negatif <- read_tsv("https://raw.githubusercontent.com/fajri91/InSet/master/negative.tsv")
+
+# Gabungkan jadi 1 kamus, pastikan kolom weight jadi angka
+lexicon_inset <- bind_rows(positif, negatif) %>%
+  mutate(weight = as.numeric(weight))
+
+# Cek ulang isinya
+head(lexicon_inset, 10)
+
+library(tidytext)
+library(dplyr)
+library(stringr)
+
+# 1. Pecah tiap komentar jadi kata-kata (tokenisasi), sambil bawa ID unik per komentar
+asalmuasal_sentimen <- asalmuasal_tema %>%
+  mutate(komentar_id = row_number()) %>%
+  select(komentar_id, komentar, label_tema)
+
+kata_per_komentar <- asalmuasal_sentimen %>%
+  unnest_tokens(word, komentar)
+
+# 2. Cocokkan tiap kata dengan skor di lexicon InSet
+kata_dengan_skor <- kata_per_komentar %>%
+  left_join(lexicon_inset, by = "word")
+
+# 3. Jumlahkan skor per komentar (kata yang tidak ada di lexicon otomatis dianggap 0)
+skor_sentimen <- kata_dengan_skor %>%
+  mutate(weight = ifelse(is.na(weight), 0, weight)) %>%
+  group_by(komentar_id) %>%
+  summarise(skor_total = sum(weight)) %>%
+  mutate(
+    sentimen = case_when(
+      skor_total > 0 ~ "Positif",
+      skor_total < 0 ~ "Negatif",
+      TRUE ~ "Netral"
+    )
+  )
+
+# 4. Gabungkan skor sentiment ke data asli (biar ada komentar, tema, dan sentiment jadi satu)
+asalmuasal_final <- asalmuasal_sentimen %>%
+  left_join(skor_sentimen, by = "komentar_id")
+
+# 5. Cek distribusi sentiment secara keseluruhan
+table(asalmuasal_final$sentimen)
+
+##Cek manual Kepastian Negatif yang sebenarnya yang harusnya positif malah negatif
+##Begitu pula Ada yang Mix Positif dan Negatif (INI VERSI GAGAL)
+set.seed(123)
+sampel_negatif <- asalmuasal_final %>%
+  filter(sentimen == "Negatif") %>%
+  slice_sample(n = 20) %>%
+  select(komentar, skor_total)
+
+View(sampel_negatif)
+
+### Sentiment VS Rating
+library(dplyr)
+
+# 1. Gabungkan sentiment + rating asli
+cek_konsistensi <- asalmuasal_final %>%
+  left_join(asalmuasal %>% mutate(komentar_id = row_number()) %>% select(komentar_id, rating), 
+            by = "komentar_id")
+
+# 2. Mismatch: rating tinggi tapi sentiment Negatif
+mismatch_tinggi_negatif <- cek_konsistensi %>%
+  filter(rating >= 4, sentimen == "Negatif")
+nrow(mismatch_tinggi_negatif)
+
+# 3. Mismatch: rating rendah tapi sentiment Positif
+mismatch_rendah_positif <- cek_konsistensi %>%
+  filter(rating <= 2, sentimen == "Positif")
+nrow(mismatch_rendah_positif)
+
+# 4. Hitung persentase mismatch dari total
+total_mismatch <- nrow(mismatch_tinggi_negatif) + nrow(mismatch_rendah_positif)
+persen_mismatch <- round(total_mismatch / nrow(cek_konsistensi) * 100, 1)
+persen_mismatch
+
+# 5. Lihat beberapa contoh mismatch buat dicek manual
+View(bind_rows(mismatch_tinggi_negatif, mismatch_rendah_positif) %>% 
+       select(komentar, rating, sentimen, skor_total))
+
+
+set.seed(123)
+sample_cek <- mismatch_tinggi_negatif %>%
+  slice_sample(n = 20) %>%
+  select(komentar, rating, sentimen, skor_total)
+
+View(sample_cek)
+
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# 1. Hitung jumlah & persentase per tema, dengan nama tema yang eksplisit (anti ketuker)
+ringkasan_tema <- asalmuasal_tema %>%
+  summarise(
+    `Tempat/Fasilitas` = sum(tema_tempat),
+    `Produk/Perlengkapan` = sum(tema_produk),
+    `Makanan/Food Court` = sum(tema_makanan),
+    `Harga` = sum(tema_harga),
+    `Akses/Lokasi` = sum(tema_akses)
+  ) %>%
+  pivot_longer(everything(), names_to = "tema", values_to = "jumlah_komentar") %>%
+  mutate(persentase = round(jumlah_komentar / nrow(asalmuasal_tema) * 100, 1))
+
+# 2. Cek tabelnya
+View(ringkasan_tema)
+
+# 3. Bikin plot bar chart langsung dari data itu
+ggplot(ringkasan_tema, aes(x = reorder(tema, -persentase), y = persentase)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = paste0(persentase, "%")), vjust = -0.5) +
+  labs(
+    title = "Distribusi Tema dalam Ulasan IKEA (n=698)",
+    x = NULL,
+    y = "% dari total komentar"
+  ) +
+  theme_minimal()
+--------------------------------------------------------------------------------
+### Relationship Between Themes in every Komentar
+##  15 September 2026
+### Ini Menjawab Hubungan but Kontribusi Baseline Tidak diketahui  
+
+  library(dplyr)
+
+# Ambil kolom tema, ubah ke numeric (0/1)
+tema_matrix <- asalmuasal_tema %>% 
+  select(starts_with("tema_")) %>% 
+  mutate(across(everything(), as.numeric)) %>% 
+  as.matrix()
+
+# Matrix co-occurrence: diagonal = total tiap tema, off-diagonal = jumlah komentar yang punya kedua tema itu
+co_occurrence <- t(tema_matrix) %*% tema_matrix
+print(co_occurrence)    
+
+# Persentase baris: co_occurrence[i,j] / total tema i
+co_occurrence_pct <- round(co_occurrence / diag(co_occurrence) * 100, 1)
+print(co_occurrence_pct)
+
+library(ggplot2)
+library(reshape2)
+
+co_df <- melt(co_occurrence_pct)
+ggplot(co_df, aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  geom_text(aes(label = value)) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(title = "Keterkaitan Antar Tema (% Komentar)", x = "", y = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+--------------------------------------------------------------------------------
+  ### Relationship Between Themes in every Komentar DAN MENJAWAB KONTRIBUSI JUJUR
+  ##  15 September 2026
+  ### Ini Menjawab Hubungan but Kontribusi Baseline Tidak diketahui 
+  
+  library(dplyr)
+library(ggplot2)
+library(reshape2)
+
+# ambil ulang matrix tema (0/1) dari data kamu
+tema_matrix <- asalmuasal_tema %>% 
+  select(starts_with("tema_")) %>% 
+  mutate(across(everything(), as.numeric)) %>% 
+  as.matrix()
+
+N <- nrow(asalmuasal_tema)
+
+# co-occurrence count (hasil kemarin)
+co_occurrence <- t(tema_matrix) %*% tema_matrix
+
+# hitung lift: observed / expected
+# expected[i,j] = count_i * count_j / N
+count_tema <- diag(co_occurrence)  # total kemunculan tiap tema
+expected <- outer(count_tema, count_tema) / N
+lift_matrix <- co_occurrence / expected
+
+# ganti label biar rapi (opsional, sesuaikan urutan kolom kamu)
+nama_tema <- c("Tempat/Fasilitas", "Produk/Perlengkapan", "Makanan/Food Court", "Harga", "Akses/Lokasi")
+rownames(lift_matrix) <- nama_tema
+colnames(lift_matrix) <- nama_tema
+
+print(round(lift_matrix, 3))  
+--------------------------------------------------------------------------------
+
+lift_df <- melt(lift_matrix)
+
+ggplot(lift_df, aes(Var2, Var1, fill = value)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = round(value, 2)), size = 4) +
+  scale_fill_gradient2(
+    low = "firebrick", mid = "white", high = "steelblue",
+    midpoint = 1, name = "Lift"
+  ) +
+  labs(
+    title = "Lift Co-occurrence Antar Tema",
+    subtitle = "1.0 = tidak ada hubungan istimewa (independen)",
+    x = "", y = ""
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+--------------------------------------------------------------------------------
+# ubah matrix jadi long format, ambil pasangan unik aja (buang diagonal & duplikat)
+lift_pairs <- lift_df %>%
+  filter(as.character(Var1) < as.character(Var2)) %>%  # cegah duplikat A-B & B-A
+  arrange(desc(value)) %>%
+  mutate(pasangan = paste(Var1, Var2, sep = " – "))
+
+ggplot(lift_pairs, aes(x = reorder(pasangan, value), y = value)) +
+  geom_col(aes(fill = value > 1), show.legend = FALSE) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "gray40") +
+  geom_text(aes(label = round(value, 2)), hjust = -0.2, size = 3.5) +
+  scale_fill_manual(values = c("TRUE" = "steelblue", "FALSE" = "firebrick")) +
+  coord_flip() +
+  labs(
+    title = "Kekuatan Keterkaitan Antar Tema (Lift)",
+    subtitle = "Garis putus-putus = titik independen (lift = 1)",
+    x = "", y = "Lift"
+  ) +
+  theme_minimal(base_size = 12)
+-------------------------------------------------------------------------------
+### CHI SQUARE TEST
+  library(dplyr)
+
+# tema_matrix udah ada dari kode sebelumnya (0/1 per tema)
+# kalau session R kamu udah ke-reset, jalanin ulang ini dulu:
+tema_matrix <- asalmuasal_tema %>% 
+  select(starts_with("tema_")) %>% 
+  mutate(across(everything(), as.numeric)) %>% 
+  as.matrix()
+
+nama_tema <- c("Tempat/Fasilitas", "Produk/Perlengkapan", "Makanan/Food Court", "Harga", "Akses/Lokasi")
+colnames(tema_matrix) <- nama_tema
+
+# fungsi buat bikin tabel kontingensi 2x2 & jalanin chi-square per pasangan
+uji_chi_pasangan <- function(matrix_tema, tema_a, tema_b) {
+  a <- matrix_tema[, tema_a]
+  b <- matrix_tema[, tema_b]
+  
+  # tabel kontingensi 2x2: ada/nggak A x ada/nggak B
+  tabel <- table(a, b)
+  
+  hasil <- suppressWarnings(chisq.test(tabel, correct = TRUE))  # correct=TRUE = Yates' correction, lebih aman buat sel kecil
+  
+  data.frame(
+    pasangan = paste(tema_a, "-", tema_b),
+    observed = sum(a == 1 & b == 1),
+    chi_square = round(hasil$statistic, 3),
+    p_value = round(hasil$p.value, 4),
+    signifikan = ifelse(hasil$p.value < 0.05, "Ya (p < 0.05)", "Tidak")
+  )
+}
+
+# generate semua kombinasi pasangan tema (tanpa duplikat)
+pasangan_list <- combn(nama_tema, 2, simplify = FALSE)
+
+# jalanin buat semua pasangan, gabungin jadi 1 tabel
+hasil_chi <- bind_rows(lapply(pasangan_list, function(p) {
+  uji_chi_pasangan(tema_matrix, p[1], p[2])
+}))
+
+# urutin dari yang paling signifikan (p paling kecil)
+hasil_chi <- hasil_chi %>% arrange(p_value)
+
+print(hasil_chi)  
+
+
+
+# gabung dengan lift yang udah dihitung sebelumnya
+lift_pairs_gabung <- lift_pairs %>%  # dari kode heatmap sebelumnya
+  left_join(hasil_chi, by = "pasangan") %>%
+  select(pasangan, lift = value, p_value, signifikan)
+
+print(lift_pairs_gabung)
+-------------------------------------------------------------------------------
+###  16 SEPTEMBER 2026
+## WORD CLOUD FIX FOR PROJECT
+  library(dplyr)
+library(tidytext)
+library(wordcloud2)
+
+stopwords_id <- c("dan", "di", "yang", "ada", "juga", "untuk", "ke", "dari",
+                  "ini", "itu", "dengan", "nya", "saya", "kami", "kita",
+                  "atau", "tapi", "tidak", "bisa", "akan", "sudah", "belum",
+                  "jadi", "karena", "saat", "banget", "sih", "ya", "aja",
+                  "kalo", "kalau", "lagi", "pas", "buat", "gak", "ga",
+                  "nggak", "sangat", "lebih", "sama", "pada", "adalah", "yg")
+
+# ---- tokenisasi ulang, tapi kali ini BAWA kategori sentiment per komentar ----
+# sesuaikan nama kolom "kategori_sentimen" dengan kolom sentiment asli kamu di asalmuasal_tema
+kata_sentiment <- asalmuasal_tema %>%
+  select(komentar, kategori_sentimen) %>%
+  unnest_tokens(word, komentar) %>%
+  filter(!word %in% c(stopwords_id, "ikea"))
+
+# ---- tentuin sentiment DOMINAN per kata (1 kata bisa muncul di banyak komentar beda sentiment) ----
+sentiment_per_kata <- kata_sentiment %>%
+  count(word, kategori_sentimen) %>%
+  group_by(word) %>%
+  slice_max(n, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  select(word, kategori_sentimen)
+
+# ---- gabung ke frekuensi_bersih yang udah kamu punya ----
+frekuensi_bersih_sentiment <- frekuensi_bersih %>%
+  left_join(sentiment_per_kata, by = "word")
+
+# ---- bikin vector warna, URUTANNYA HARUS SAMA PERSIS sama baris data ----
+warna_map <- c("Positif" = "#2E7D32", "Negatif" = "#C62828", "Netral" = "#9E9E9E")
+warna_vector <- warna_map[frekuensi_bersih_sentiment$kategori_sentimen]
+warna_vector[is.na(warna_vector)] <- "#9E9E9E"  # jaga-jaga kalau ada kata yang nggak ke-match sentiment
+
+# ---- plot, sama persis format kamu, tambah parameter color ----
+wordcloud2(
+  data = frekuensi_bersih_sentiment %>% select(word, freq),
+  color = warna_vector,
+  size = 0.7
+)
+
+
+
+colnames(asalmuasal_tema)
+ls()
+colnames(nama_objek_sentiment_kamu)  # ganti sesuai nama yang ketemu
+
+
+colnames(asalmuasal)
+colnames(asalmuasal_id)
+
+
+
+
+
+# install kalau belum ada
+install.packages(c("widyr", "igraph", "ggraph"))
+
+library(dplyr)
+library(tidytext)
+library(widyr)
+library(igraph)
+library(ggraph)
+library(stringr)
+
+# ---- 1. Gabungin semua keyword tema jadi 1 daftar, tiap kata dikasih label temanya ----
+kata_fokus <- bind_rows(
+  data.frame(word = kw_tempat,  tema = "Tempat/Fasilitas"),
+  data.frame(word = kw_produk,  tema = "Produk/Perlengkapan"),
+  data.frame(word = kw_makanan, tema = "Makanan/Food Court"),
+  data.frame(word = kw_harga,   tema = "Harga"),
+  data.frame(word = kw_akses,   tema = "Akses/Lokasi")
+)
+
+# ---- 2. Tokenisasi komentar, ambil HANYA kata yang ada di daftar fokus ----
+tokens <- asalmuasal_tema %>%
+  mutate(komentar_id = row_number()) %>%
+  select(komentar_id, komentar) %>%
+  mutate(komentar = str_to_lower(komentar)) %>%
+  unnest_tokens(word, komentar) %>%
+  filter(word %in% kata_fokus$word)
+
+# ---- 3. Hitung co-occurrence antar kata (muncul bareng di komentar yang sama) ----
+word_pairs <- tokens %>%
+  pairwise_count(word, komentar_id, sort = TRUE, upper = FALSE)
+
+# ---- 4. Filter biar graph nggak terlalu ramai — sesuaikan angka ini kalau perlu ----
+word_pairs_filtered <- word_pairs %>% filter(n >= 5)
+
+# ---- 5. Bikin graph, cuma masukin kata yang beneran punya koneksi ----
+kata_terpakai <- kata_fokus %>%
+  filter(word %in% c(word_pairs_filtered$item1, word_pairs_filtered$item2)) %>%
+  distinct(word, .keep_all = TRUE)
+
+graph <- graph_from_data_frame(word_pairs_filtered, vertices = kata_terpakai)
+
+# ---- 6. Plot, warna node = tema ----
+warna_tema <- c(
+  "Tempat/Fasilitas"    = "#4C72B0",
+  "Produk/Perlengkapan" = "#DD8452",
+  "Makanan/Food Court"  = "#55A868",
+  "Harga"               = "#C44E52",
+  "Akses/Lokasi"        = "#8172B2"
+)
+
+ggraph(graph, layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n), color = "gray70", show.legend = FALSE) +
+  geom_node_point(aes(color = tema), size = 9) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 3.5, fontface = "bold") +
+  scale_color_manual(values = warna_tema, name = "Tema") +
+  theme_void() +
+  labs(title = "Network Co-occurrence Kata, Diklaster per Tema") +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+
+
+
+library(tidytext)
+library(dplyr)
+library(stringr)
+library(widyr)
+library(igraph)
+library(ggraph)
+
+# ---- kode kamu, TIDAK diubah ----
+asalmuasal_id <- asalmuasal %>%
+  mutate(komentar_id = row_number())
+
+kata_kata_id <- asalmuasal_id %>%
+  select(komentar_id, komentar) %>%
+  unnest_tokens(word, komentar)
+
+kata_pairs <- kata_kata_id %>%
+  filter(!word %in% c(stopwords_id, "ikea")) %>%
+  add_count(word) %>%
+  filter(n >= 15) %>%
+  pairwise_cor(word, komentar_id, sort = TRUE)
+
+# ---- BARU: bikin mapping kata -> tema ----
+kata_ke_tema <- bind_rows(
+  data.frame(word = kw_tempat,  tema = "Tempat/Fasilitas"),
+  data.frame(word = kw_produk,  tema = "Produk/Perlengkapan"),
+  data.frame(word = kw_makanan, tema = "Makanan/Food Court"),
+  data.frame(word = kw_harga,   tema = "Harga"),
+  data.frame(word = kw_akses,   tema = "Akses/Lokasi")
+) %>%
+  distinct(word, .keep_all = TRUE)  # jaga-jaga kalau ada 1 kata kepake di >1 tema
+
+# ---- filter pairs, siapin graph ----
+pairs_filtered <- kata_pairs %>% filter(correlation > 0.2)
+
+graph <- pairs_filtered %>% graph_from_data_frame()
+
+# ---- attach tema ke tiap node, kata yang nggak ke-mapping jadi "Lainnya" ----
+nama_node <- V(graph)$name
+tema_node <- kata_ke_tema$tema[match(nama_node, kata_ke_tema$word)]
+tema_node[is.na(tema_node)] <- "Lainnya"
+V(graph)$tema <- tema_node
+
+# ---- plot dengan warna per tema ----
+warna_tema <- c(
+  "Tempat/Fasilitas"    = "#4C72B0",
+  "Produk/Perlengkapan" = "#DD8452",
+  "Makanan/Food Court"  = "#55A868",
+  "Harga"               = "#C44E52",
+  "Akses/Lokasi"        = "#8172B2",
+  "Lainnya"             = "#D3D3D3"   # abu-abu buat kata di luar 5 tema
+)
+
+ggraph(graph, layout = "fr") +
+  geom_edge_link(aes(alpha = correlation), color = "gray60", show.legend = FALSE) +
+  geom_node_point(aes(color = tema), size = 4) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 3) +
+  scale_color_manual(values = warna_tema, name = "Tema") +
+  theme_void() +
+  labs(title = "Network Co-occurrence Kata, Diwarnai per Tema") +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+
+
+
+library(wordcloud)
+library(tidytext)
+library(dplyr)
+library(stringr)
+
+# ---- (tokenisasi & freq_per_tema tetap sama kayak sebelumnya) ----
+tokens_per_komentar <- asalmuasal_tema %>%
+  mutate(komentar_lower = str_to_lower(komentar)) %>%
+  select(komentar_lower, starts_with("tema_")) %>%
+  unnest_tokens(word, komentar_lower) %>%
+  filter(!word %in% c(stopwords_id, "ikea"))
+
+freq_per_tema <- function(data, kolom_tema) {
+  data %>%
+    filter(.data[[kolom_tema]] == TRUE) %>%
+    count(word, sort = TRUE) %>%
+    filter(n >= 2)
+}
+
+freq_tempat  <- freq_per_tema(tokens_per_komentar, "tema_tempat")
+freq_produk  <- freq_per_tema(tokens_per_komentar, "tema_produk")
+freq_makanan <- freq_per_tema(tokens_per_komentar, "tema_makanan")
+freq_harga   <- freq_per_tema(tokens_per_komentar, "tema_harga")
+freq_akses   <- freq_per_tema(tokens_per_komentar, "tema_akses")
+
+# ---- PENYESUAIAN: buka device baru ukuran PERSEGI per panel, bukan lebar ----
+dev.new(width = 9, height = 6)  # rasio lebih pas buat grid 2x3
+
+par(mfrow = c(2, 3), mar = c(0.5, 0.5, 2, 0.5))  # margin dikecilin, ngirit ruang kosong
+
+wordcloud(words = freq_tempat$word, freq = freq_tempat$n,
+          max.words = 40, colors = "#4C72B0", random.order = FALSE,
+          scale = c(3, 0.6), rot.per = 0.15)   # scale dikecilin = kata gak nyebar jauh
+title("Tempat/Fasilitas", cex.main = 1.1)
+
+wordcloud(words = freq_produk$word, freq = freq_produk$n,
+          max.words = 40, colors = "#DD8452", random.order = FALSE,
+          scale = c(3, 0.6), rot.per = 0.15)
+title("Produk/Perlengkapan", cex.main = 1.1)
+
+wordcloud(words = freq_makanan$word, freq = freq_makanan$n,
+          max.words = 40, colors = "#55A868", random.order = FALSE,
+          scale = c(3, 0.6), rot.per = 0.15)
+title("Makanan/Food Court", cex.main = 1.1)
+
+wordcloud(words = freq_harga$word, freq = freq_harga$n,
+          max.words = 40, colors = "#C44E52", random.order = FALSE,
+          scale = c(3, 0.6), rot.per = 0.15)
+title("Harga", cex.main = 1.1)
+
+wordcloud(words = freq_akses$word, freq = freq_akses$n,
+          max.words = 40, colors = "#8172B2", random.order = FALSE,
+          scale = c(3, 0.6), rot.per = 0.15)
+title("Akses/Lokasi", cex.main = 1.1)
+
+par(mfrow = c(1, 1))
