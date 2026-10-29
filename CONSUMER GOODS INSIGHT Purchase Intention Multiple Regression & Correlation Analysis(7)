@@ -1,0 +1,262 @@
+#Install & load package yang dibutuhkan (jalanin di R Console/RStudio):
+install.packages("readxl")
+library(readxl)
+
+setwd("C:/Users/pc/Downloads")
+
+df <- read_excel("dummy_consumer_fnb.xlsx", sheet = "Data")
+
+head(df)
+
+tabel <- table(df$channel, df$repeat_purchase)
+print(tabel)
+
+chisq.test(tabel)
+
+#Perbaiki tampilan disini--------------------------------------------------
+install.packages("gmodels")
+library(gmodels)
+CrossTable(df$channel, df$repeat_purchase, chisq = TRUE)
+
+#Coba upload manual CSV
+library(readxl)
+setwd("C:/Users/pc/Downloads")
+df <- read_excel("dummy_consumer_fnb.xlsx", sheet = "Data")
+head(df)
+
+#Liat tabel utuha
+View(df)
+
+# Bikin Cross tabulation
+tabel <- table(df$channel, df$repeat_purchase)
+print(tabel)
+
+#Bikin Chi Square
+chisq.test(tabel)
+
+#Ini Interaktif then chi square diatas
+library(gmodels)
+CrossTable(df$channel, df$repeat_purchase, chisq = TRUE)
+
+
+
+## UJI Chi Square 3 x 5
+tabel3 <- table(df$income_bracket, df$city)
+addmargins(tabel3)
+chisq.test(tabel3)
+
+## Uji Anova (City X rating_taste)
+hasil_anova <- aov(rating_taste ~ city, data = df)
+summary(hasil_anova)
+
+## Uji Sampe T-Test
+df <- read_excel("dummy_consumer_fnb.xlsx", sheet = "Data")
+
+hasil <- t.test(df$rating_taste, mu = 3)
+hasil
+
+t.test(df$rating_taste, mu = 3.4)
+
+install.packages("effsize")
+library(effsize)
+cohen.d(df$rating_taste, f = NA, mu = 3)
+
+##Hapus data name
+rm(Asalmuasal, tabel)
+
+--------------------------------------------------------------------------------
+### BROOO(7 SEPTEMBER 2026)
+
+##Independent T test (Gender X Rating Taste)
+t.test(rating_taste ~ gender, data = df)
+
+##Independent T test ( X Rating Taste)
+t.test(avg_spending_rp ~ channel, data = df)
+
+
+library(report)
+report(t.test(avg_spending_rp ~ channel, data = df))
+
+### ADVANCE ANALYST
+## Regresi Linier Sederhana (Purchase Intention X Rating Taste)
+
+model_sederhana <- lm(purchase_intention ~ rating_taste, data = df)
+summary(model_sederhana)
+  
+
+install.packages("broom")
+library(broom)
+
+tidy(model_sederhana)      # tabel buat koefisien
+glance(model_sederhana)    # tabel buat model fit (R-squared, F-stat, dll)  
+
+## Regresi Linier Berganda (Purchase Intention X Rating Taste, Rating_Price,
+##Rating_Health, rating_packaging)
+model_berganda <- lm(purchase_intention ~ rating_taste + rating_price + rating_health + rating_packaging, data = df)
+summary(model_berganda)
+  
+  
+  
+model_sederhana <- lm(purchase_intention ~ rating_taste, data = df)
+summary(model_sederhana)
+model_sederhana <- lm(purchase_intention ~ rating_price, data = df)
+summary(model_sederhana)
+model_sederhana <- lm(purchase_intention ~ rating_health, data = df)
+summary(model_sederhana)
+model_sederhana <- lm(purchase_intention ~ rating_packaging, data = df)
+summary(model_sederhana)
+
+-------------------------------------------------------------------------------
+##11-September-2026
+## Ancova Mirip Regresi Berganda
+  
+-------------------------------------------------------------------------------
+## 13 September 2026
+-------------------------------------------------------------------------------
+## 6 Oktober 2026
+  # 1. Cek outcome: harus 0/1
+  table(df$repeat_purchase)
+# kalau isinya teks "Ya"/"Tidak", ubah dulu (sesuaikan tulisannya):
+# df$repeat_purchase <- ifelse(df$repeat_purchase == "Ya", 1, 0)
+
+df$repeat_purchase <- ifelse(df$repeat_purchase == "Ya", 1, 0)
+
+# cek: harus tinggal 0 dan 1
+table(df$repeat_purchase)
+prop.table(table(df$repeat_purchase))
+  
+# 2. Model
+m1 <- glm(repeat_purchase ~ purchase_intention, data = df, family = binomial)
+summary(m1)
+
+# 3. Odds ratio + 95% CI
+exp(coef(m1))
+exp(confint(m1))
+
+# 4. Peluang beli ulang per level purchase_intention
+predict(m1, newdata = data.frame(purchase_intention = 1:5), type = "response")
+-------------------------------------------------------------------------------
+### 7 Oktober 2026
+## Brand Trust  
+##(Model Gabungan setiap brand "apakah ada hubungan antara Brand keseluruhan")
+df$brand_trust <- rowMeans(df[, c("brand_trust_1", "brand_trust_2", "brand_trust_3")])
+
+m2 <- glm(repeat_purchase ~ brand_trust, data = df, family = binomial)
+summary(m2)
+exp(coef(m2))
+exp(confint(m2))
+predict(m2, newdata = data.frame(brand_trust = 1:5), type = "response") 
+
+summary(df$brand_trust)
+
+##(Model Terpisah)
+m_item <- glm(repeat_purchase ~ brand_trust_1 + brand_trust_2 + brand_trust_3,
+              data = df, family = binomial)
+summary(m_item)
+exp(coef(m_item))
+exp(confint(m_item))
+-------------------------------------------------------------------------------
+## 20 Oktober 2026
+## RP AND PI AND BT
+m3 <- glm(repeat_purchase ~ purchase_intention + brand_trust, data = df, family = binomial)
+summary(m3)
+exp(coef(m3))
+exp(confint(m3))  
+
+-------------------------------------------------------------------------------
+## 21 Oktober 2026 VISUALISASIIIIIII
+## 
+  # model niat beli saja (m1)
+  x <- seq(1, 5, by = 0.1)
+p <- predict(m1, newdata = data.frame(purchase_intention = x), type = "response")
+
+plot(x, p, type = "l", ylim = c(0, 1),
+     xlab = "Purchase intention", ylab = "Peluang beli ulang")  
+
+
+plot(NULL, xlim = c(1, 5), ylim = c(0, 1),
+     xlab = "Purchase intention", ylab = "Peluang beli ulang")
+for (tr in c(2, 3, 4)) {
+  lines(x, predict(m3, data.frame(purchase_intention = x, brand_trust = tr), type = "response"))
+}
+legend("topleft", legend = c("trust 2", "trust 3", "trust 4"), lty = 1, col = 1:3)
+
+
+
+
+
+
+
+install.packages("ggplot2")   # sekali saja
+library(ggplot2)
+
+# rentang x sesuai data aslimu (supaya tidak ekstrapolasi)
+x  <- seq(min(df$purchase_intention), max(df$purchase_intention), length.out = 50)
+nd <- expand.grid(purchase_intention = x, brand_trust = c(2, 3, 4))
+
+pr <- predict(m3, newdata = nd, type = "link", se.fit = TRUE)
+nd$p  <- plogis(pr$fit)
+nd$lo <- plogis(pr$fit - 1.96 * pr$se.fit)
+nd$hi <- plogis(pr$fit + 1.96 * pr$se.fit)
+nd$trust <- factor(nd$brand_trust, labels = c("Trust 2", "Trust 3", "Trust 4"))
+
+ggplot(nd, aes(purchase_intention, p, color = trust, fill = trust)) +
+  geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.15, color = NA) +
+  geom_line(linewidth = 1.1) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+  labs(title = "Peluang beli ulang naik seiring niat beli dan kepercayaan brand",
+       x = "Purchase intention (1-5)", y = "Peluang beli ulang",
+       color = NULL, fill = NULL) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "top")
+
+
+
+
+library(ggplot2)
+
+ci   <- confint(model_berganda)
+koef <- data.frame(
+  variabel = c("Rasa", "Harga", "Kesehatan", "Kemasan"),
+  beta     = coef(model_berganda)[-1],
+  lo       = ci[-1, 1],
+  hi       = ci[-1, 2]
+)
+
+ggplot(koef, aes(x = beta, y = reorder(variabel, beta))) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_pointrange(aes(xmin = lo, xmax = hi), linewidth = 0.8) +
+  labs(title = "Rasa paling mendorong niat beli, kemasan paling kecil",
+       x = "Tambahan niat beli per kenaikan 1 poin rating",
+       y = NULL) +
+  theme_minimal(base_size = 13)
+---------------------------------------------------------------------------------
+## 21 Oktober 2026
+  
+  library(ggplot2)
+
+# grid skor brand_trust sesuai rentang data asli (1 - 4,67)
+grid <- data.frame(brand_trust = seq(1, 4.67, length.out = 100))
+
+# prediksi + interval kepercayaan 95%
+pred <- predict(m2, newdata = grid, type = "link", se.fit = TRUE)
+grid$prob  <- plogis(pred$fit)
+grid$lower <- plogis(pred$fit - 1.96 * pred$se.fit)
+grid$upper <- plogis(pred$fit + 1.96 * pred$se.fit)
+
+# data asli (0/1) untuk titik latar
+df$repeat_bin <- ifelse(df$repeat_purchase == "Ya", 1, 0)
+
+ggplot(grid, aes(x = brand_trust, y = prob)) +
+  geom_point(data = df, aes(y = repeat_bin), alpha = 0.15,
+             position = position_jitter(height = 0.02)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2) +
+  geom_line(linewidth = 1) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+  labs(title = "Peluang Repeat Purchase berdasarkan Brand Trust",
+       x = "Skor Brand Trust (1-5)",
+       y = "Peluang Repeat Purchase",
+       caption = "Data simulasi, n = 300") +
+  theme_minimal()  
+  
+  
