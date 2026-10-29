@@ -1,0 +1,304 @@
+# =====================================================================
+# PRACTICE CONSUMER INSIGHT: JAR (mi instan) & CONJOINT (iced coffee)
+# Folder kerja : C:/Users/pc/OneDrive/R studio Practice
+# File data    : data_JAR_final.csv, data_Conjoint_final.csv (taruh di folder yang sama)
+# Cara pakai   : jalankan per bagian (Ctrl+Enter), baca komentar, lalu tulis insight lo sendiri
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# 0. SETUP
+# ---------------------------------------------------------------------
+folder <- "C:/Users/pc/OneDrive/R studio Practice"
+setwd(folder)
+
+pkgs <- c("tidyverse", "survival", "lme4", "lmerTest", "mlogit", "dfidx")
+to_install <- pkgs[!pkgs %in% rownames(installed.packages())]
+if (length(to_install) > 0) install.packages(to_install)
+invisible(lapply(pkgs, library, character.only = TRUE))
+
+options(contrasts = c("contr.sum", "contr.poly"))   # effect coding untuk part-worth
+
+# ---------------------------------------------------------------------
+# 1. LOAD DATA + LIHAT TAMPILAN KESELURUHAN
+# ---------------------------------------------------------------------
+df_jar  <- read.csv("data_JAR_final.csv",      stringsAsFactors = FALSE)
+df_conj <- read.csv("data_Conjoint_final.csv", stringsAsFactors = FALSE)
+
+# fungsi ringkasan cepat satu dataframe
+df_overview <- function(df, nama = "df") {
+  cat("\n=====", nama, "=====\n")
+  cat("Dimensi :", nrow(df), "baris x", ncol(df), "kolom\n")
+  cat("Total NA:", sum(is.na(df)), "\n\n")
+  glimpse(df)
+  cat("\nJumlah nilai unik per kolom:\n")
+  print(sapply(df, n_distinct))
+  cat("\nSummary:\n")
+  print(summary(df))
+}
+
+df_overview(df_jar,  "JAR")
+df_overview(df_conj, "CONJOINT")
+
+# tampilan tabel interaktif di RStudio
+View(df_jar)
+View(df_conj)
+
+# cek struktur desain
+n_distinct(df_jar$respondent_id)                       # responden JAR
+df_conj %>% group_by(metode) %>% summarise(responden = n_distinct(respondent_id), baris = n())
+table(df_jar$produk_kode, df_jar$urutan_cicip)         # urutan cicip seimbang?
+
+# profil responden (1 baris per responden)
+prof_jar  <- df_jar  %>% distinct(respondent_id, usia, gender, domisili, status_pekerjaan,
+                                  pendapatan_bulanan, frekuensi_makan_mi_per_minggu,
+                                  tingkat_suka_pedas, merek_mi_favorit, tambah_topping)
+prof_conj <- df_conj %>% distinct(metode, respondent_id, usia, gender, domisili, status_pekerjaan,
+                                  pendapatan_bulanan, frekuensi_minum_kopi_per_minggu,
+                                  preferensi_manis, tempat_beli_utama)
+summary(prof_jar)
+table(prof_conj$metode, prof_conj$gender)
+
+# =====================================================================
+# PART A. JUST-ABOUT-RIGHT (JAR)
+# =====================================================================
+
+# A1. Rata-rata kesukaan per produk (+ uji beda antar produk, within-subject)
+df_jar %>% group_by(produk_kode) %>%
+  summarise(n = n(), mean_liking = mean(suka_keseluruhan), sd = sd(suka_keseluruhan))
+
+summary(aov(suka_keseluruhan ~ produk_kode + Error(respondent_id / produk_kode), data = df_jar))
+pairwise.t.test(df_jar$suka_keseluruhan, df_jar$produk_kode, paired = TRUE, p.adjust.method = "bonferroni")
+# (paired=TRUE mengandalkan urutan baris per responden; df_jar sudah terurut per responden)
+
+# A2. Ubah ke format long per atribut + kategori JAR
+#     Kaldu/Asin/Pedas : 1-2 kurang, 3 pas, 4-5 terlalu
+#     Tekstur          : Too little = terlalu LEMBEK, Too much = terlalu KERAS
+jar_long <- df_jar %>%
+  pivot_longer(c(kaldu, keasinan, kepedasan, tekstur_mi), names_to = "atribut", values_to = "skor") %>%
+  mutate(kategori = factor(case_when(skor <= 2 ~ "Too little", skor == 3 ~ "JAR", TRUE ~ "Too much"),
+                           levels = c("Too little", "JAR", "Too much")))
+
+# A3. Distribusi % per produk x atribut
+jar_dist <- jar_long %>%
+  count(produk_kode, atribut, kategori) %>%
+  group_by(produk_kode, atribut) %>%
+  mutate(pct = round(100 * n / sum(n), 1)) %>% ungroup()
+jar_dist %>% select(-n) %>% pivot_wider(names_from = kategori, values_from = pct, values_fill = 0)
+
+ggplot(jar_dist, aes(x = atribut, y = pct, fill = kategori)) +
+  geom_col() + coord_flip() + facet_wrap(~produk_kode) +
+  scale_fill_manual(values = c("Too little" = "#E69F00", "JAR" = "#009E73", "Too much" = "#D55E00")) +
+  labs(title = "Distribusi JAR per produk", x = NULL, y = "% responden", fill = NULL)
+
+# A4. Penalty analysis (threshold 20% + mean drop + uji t)
+penalty <- jar_long %>%
+  group_by(produk_kode, atribut) %>%
+  group_modify(~ {
+    d <- .x
+    y <- d$suka_keseluruhan[d$kategori == "JAR"]
+    map_dfr(c("Too little", "Too much"), function(k) {
+      x <- d$suka_keseluruhan[d$kategori == k]
+      tibble(arah = k, n = length(x), pct = 100 * length(x) / nrow(d),
+             mean_drop = mean(y) - mean(x),
+             weighted_penalty = (length(x) / nrow(d)) * (mean(y) - mean(x)),
+             p_value = if (length(x) > 1 && length(y) > 1) t.test(y, x)$p.value else NA_real_)
+    })
+  }) %>% ungroup()
+
+penalty %>% mutate(across(where(is.numeric), ~ round(.x, 3))) %>% arrange(desc(weighted_penalty))
+
+# prioritas perbaikan: >=20% responden, drop positif, signifikan
+prioritas <- penalty %>% filter(pct >= 20, mean_drop > 0, p_value < 0.05) %>% arrange(desc(weighted_penalty))
+prioritas
+
+# A5. Penalty plot
+ggplot(penalty %>% filter(!is.na(mean_drop)), aes(x = pct, y = mean_drop, colour = arah, label = atribut)) +
+  geom_point(size = 2.5) + geom_text(vjust = -0.8, size = 3, show.legend = FALSE) +
+  geom_vline(xintercept = 20, linetype = "dashed") + geom_hline(yintercept = 0) +
+  facet_wrap(~produk_kode) +
+  labs(title = "Penalty plot", x = "% responden non-JAR", y = "Mean drop overall liking")
+
+ggplot(penalty %>% filter(!is.na(mean_drop)), aes(x = pct, y = mean_drop, colour = arah, label = atribut)) +
+  geom_function(fun = function(x) 100 * 0.3 / x, inherit.aes = FALSE, colour = "grey60", linetype = "dotted") +  # weighted = 0,3
+  geom_function(fun = function(x) 100 * 0.6 / x, inherit.aes = FALSE, colour = "grey60", linetype = "dotted") +  # weighted = 0,6
+  geom_function(fun = function(x) 100 * 1.0 / x, inherit.aes = FALSE, colour = "grey60", linetype = "dotted") +  # weighted = 1,0
+  geom_point(size = 2.5) + geom_text(vjust = -0.8, size = 3, show.legend = FALSE) +
+  geom_vline(xintercept = 20, linetype = "dashed") + geom_hline(yintercept = 0) +
+  coord_cartesian(xlim = c(0, 100), ylim = c(-0.3, 2)) +
+  facet_wrap(~produk_kode) +
+  labs(title = "Penalty plot dengan garis weighted", x = "% responden non-JAR", y = "Mean drop overall liking")
+
+
+
+# A6. Segmentasi: apakah penalti beda antar segmen? (contoh: tingkat suka pedas)
+df_jar %>% filter(produk_kode == "M587") %>%
+  group_by(tingkat_suka_pedas) %>%
+  summarise(n = n(), liking = round(mean(suka_keseluruhan), 2),
+            pct_terlalu_pedas = round(100 * mean(kepedasan >= 4), 1))
+
+# coba juga: usia vs keasinan M903, gender vs kepedasan, tambah_topping vs kaldu
+df_jar %>% filter(produk_kode == "M903") %>%
+  group_by(kelompok_usia = cut(usia, c(0, 24, 32, 99))) %>%
+  summarise(n = n(), pct_terlalu_asin = round(100 * mean(keasinan >= 4), 1), liking = round(mean(suka_keseluruhan), 2))
+
+# A7. Driver kesukaan: regresi (skor JAR sebagai deviasi dari 3)
+reg <- df_jar %>% mutate(across(c(kaldu, keasinan, kepedasan, tekstur_mi), ~ abs(.x - 3), .names = "dev_{.col}"))
+summary(lmer(suka_keseluruhan ~ dev_kaldu + dev_keasinan + dev_kepedasan + dev_tekstur_mi +
+               produk_kode + (1 | respondent_id), data = reg))
+
+# A8. TUGAS: tulis insight JAR lo -> Temuan | Implikasi | Aksi inovasi | Cara ukur
+
+# =====================================================================
+# PART B. CONJOINT: PERSIAPAN DATA
+# =====================================================================
+lev <- list(harga_f    = c("10000", "12000", "14000"),
+            ukuran_f   = c("180", "250", "300"),
+            intensitas = c("Mild", "Medium", "Strong"),
+            varian     = c("Original Latte", "Mocha", "Caramel Latte"))
+
+prep <- function(d) d %>% mutate(
+  harga_f    = factor(harga_rp, levels = c(10000, 12000, 14000)),
+  ukuran_f   = factor(ukuran_ml, levels = c(180, 250, 300)),
+  intensitas = factor(intensitas, levels = lev$intensitas),
+  varian     = factor(varian, levels = lev$varian),
+  harga_k    = harga_rp / 1000)
+
+rating <- df_conj %>% filter(metode == "rating") %>% prep()
+choice <- df_conj %>% filter(metode == "choice") %>% prep()
+
+# helper: part-worth & importance
+pw_from_coef <- function(b) {            # dari koefisien effect-coded (level terakhir = -jumlah)
+  bind_rows(lapply(names(lev), function(a) {
+    cf <- b[paste0(a, 1:(length(lev[[a]]) - 1))]
+    tibble(atribut = a, level = lev[[a]], pw = c(cf, -sum(cf)))
+  }))
+}
+importance <- function(pw) pw %>% group_by(atribut) %>%
+  summarise(range = max(pw) - min(pw), .groups = "drop") %>%
+  mutate(importance = round(100 * range / sum(range), 1)) %>% arrange(desc(importance))
+
+# =====================================================================
+# PART C. RATING-BASED CONJOINT
+# =====================================================================
+# C1. Eksplorasi cepat
+rating %>% group_by(harga_rp) %>% summarise(mean_wtb = mean(wtb))
+rating %>% group_by(intensitas) %>% summarise(mean_wtb = mean(wtb))
+
+# C2. Mixed model (consumer = random effect), seperti poster Nofima
+m_rating <- lmer(wtb ~ harga_f + ukuran_f + intensitas + varian + (1 | respondent_id), data = rating)
+summary(m_rating)
+anova(m_rating)                                      # signifikansi main effect
+
+# C3. Part-worth & importance
+pw_rating <- pw_from_coef(fixef(m_rating))
+pw_rating
+imp_rating <- importance(pw_rating); imp_rating
+
+ggplot(pw_rating, aes(x = factor(level, levels = unique(level)), y = pw, group = 1)) +
+  geom_line() + geom_point() + geom_hline(yintercept = 0, linetype = "dashed") +
+  facet_wrap(~atribut, scales = "free_x") +
+  labs(title = "Part-worth (Rating-based)", x = NULL, y = "Part-worth")
+
+# C4. Segmentasi: part-worth individual -> k-means
+ind_pw <- rating %>%
+  group_by(respondent_id) %>%
+  group_modify(~ as_tibble(as.list(coef(lm(wtb ~ harga_f + ukuran_f + intensitas + varian, data = .x))))) %>%
+  ungroup()
+
+set.seed(123)
+km <- kmeans(scale(ind_pw %>% select(-respondent_id, -`(Intercept)`)), centers = 3, nstart = 25)
+seg_rating <- tibble(respondent_id = ind_pw$respondent_id, cluster = factor(km$cluster))
+
+rating_seg <- rating %>% left_join(seg_rating, by = "respondent_id")
+rating_seg %>% group_by(cluster, intensitas) %>% summarise(mean_wtb = mean(wtb), .groups = "drop") %>%
+  pivot_wider(names_from = intensitas, values_from = mean_wtb)
+# profil tiap cluster
+rating_seg %>% distinct(respondent_id, cluster, usia, gender, preferensi_manis,
+                        frekuensi_minum_kopi_per_minggu, pendapatan_bulanan) %>%
+  group_by(cluster) %>%
+  summarise(n = n(), usia = mean(usia), pct_perempuan = 100 * mean(gender == "Perempuan"),
+            manis = mean(preferensi_manis), freq_kopi = mean(frekuensi_minum_kopi_per_minggu))
+
+# =====================================================================
+# PART D. CHOICE-BASED CONJOINT
+# =====================================================================
+# D1. Conditional logit (aggregat)
+m_choice <- clogit(pilih ~ harga_f + ukuran_f + intensitas + varian + strata(task_id), data = choice)
+summary(m_choice)
+
+pw_choice  <- pw_from_coef(coef(m_choice))
+imp_choice <- importance(pw_choice)
+pw_choice; imp_choice
+
+# D2. WTP (harga linear, dalam Rp)
+m_wtp <- clogit(pilih ~ harga_k + ukuran_f + intensitas + varian + strata(task_id), data = choice)
+b <- coef(m_wtp)
+cat("Koefisien harga per Rp1.000:", b["harga_k"], "\n")
+cat("WTP 250 ml vs rata-rata ukuran (Rp):", round(-b["ukuran_f2"] / b["harga_k"] * 1000), "\n")
+cat("WTP Mocha vs rata-rata varian (Rp):",  round(-b["varian2"]     / b["harga_k"] * 1000), "\n")
+
+# D3. Bandingkan Rating vs Choice (importance dan part-worth distandarisasi)
+bind_rows(imp_rating %>% mutate(metode = "rating"), imp_choice %>% mutate(metode = "choice")) %>%
+  select(atribut, metode, importance) %>% pivot_wider(names_from = metode, values_from = importance)
+
+bind_rows(pw_rating %>% mutate(metode = "rating", pw_z = pw / sd(pw)),
+          pw_choice %>% mutate(metode = "choice", pw_z = pw / sd(pw))) %>%
+  ggplot(aes(x = factor(level, levels = unique(level)), y = pw_z, colour = metode, group = metode)) +
+  geom_line() + geom_point() + geom_hline(yintercept = 0, linetype = "dashed") +
+  facet_wrap(~atribut, scales = "free_x") + labs(title = "Rating vs Choice (distandarisasi)", x = NULL, y = "Part-worth (z)")
+
+# D4. Heterogenitas lewat interaksi dengan profil responden
+m_int <- clogit(pilih ~ harga_f + ukuran_f + intensitas + varian +
+                  intensitas:frekuensi_minum_kopi_per_minggu +
+                  varian:preferensi_manis +
+                  harga_f:I(pendapatan_bulanan == "<Rp2 juta") + strata(task_id), data = choice)
+summary(m_int)
+anova(m_choice, m_int)    # apakah interaksi memperbaiki model?
+
+# D5. Segmen proxy dari profil (sekadar pendekatan, bukan latent class)
+choice <- choice %>% mutate(seg_proxy = case_when(
+  frekuensi_minum_kopi_per_minggu >= 5 & preferensi_manis <= 3 ~ "Kopi_serius",
+  preferensi_manis >= 4                                         ~ "Suka_manis",
+  TRUE                                                          ~ "Lainnya"))
+table(distinct(choice, respondent_id, seg_proxy)$seg_proxy)
+
+seg_models <- choice %>% group_split(seg_proxy) %>%
+  setNames(sort(unique(choice$seg_proxy))) %>%
+  map(~ clogit(pilih ~ harga_f + ukuran_f + intensitas + varian + strata(task_id), data = .x))
+map(seg_models, ~ importance(pw_from_coef(coef(.x))))
+map(seg_models, ~ pw_from_coef(coef(.x)) %>% filter(atribut %in% c("intensitas", "varian")))
+
+# D6. Mixed logit (heterogenitas acak), opsional: tergantung versi mlogit
+choice_ml <- choice %>% mutate(pilih = as.logical(pilih))
+ml_try <- tryCatch({
+  idx <- dfidx(choice_ml, idx = list(c("task_id", "respondent_id"), "alt"))
+  m0  <- mlogit(pilih ~ harga_k + ukuran_f + intensitas + varian | 0, data = idx)
+  rnd <- names(coef(m0))[grepl("^(intensitas|varian)", names(coef(m0)))]
+  mlogit(pilih ~ harga_k + ukuran_f + intensitas + varian | 0, data = idx,
+         rpar = setNames(rep("n", length(rnd)), rnd), R = 200, halton = NA, panel = TRUE)
+}, error = function(e) { message("Mixed logit gagal: ", conditionMessage(e)); NULL })
+if (!is.null(ml_try)) summary(ml_try)    # lihat sd.* yang signifikan = preferensi heterogen
+
+# =====================================================================
+# PART E. MARKET SIMULATION (share of preference)
+# =====================================================================
+concepts <- tribble(
+  ~nama,           ~harga_rp, ~ukuran_ml, ~intensitas, ~varian,
+  "Value",          10000,     250,        "Medium",    "Original Latte",
+  "Premium",        14000,     250,        "Strong",    "Mocha",
+  "Sweet",          12000,     250,        "Mild",      "Caramel Latte")
+
+sim_share <- function(b, concepts) {
+  pw <- pw_from_coef(b)
+  get <- function(a, l) pw$pw[pw$atribut == a & pw$level == as.character(l)]
+  u <- sapply(seq_len(nrow(concepts)), function(i)
+    get("harga_f", concepts$harga_rp[i]) + get("ukuran_f", concepts$ukuran_ml[i]) +
+      get("intensitas", concepts$intensitas[i]) + get("varian", concepts$varian[i]))
+  tibble(nama = concepts$nama, share = round(100 * exp(u) / sum(exp(u)), 1))
+}
+
+sim_share(coef(m_choice), concepts)                       # seluruh pasar
+map(seg_models, ~ sim_share(coef(.x), concepts))          # per segmen proxy
+
+# TUGAS: ganti 'concepts' dengan skenario lo (mis. naikkan harga Premium, ganti ukuran) dan lihat share-nya.
+# TUGAS: tulis insight conjoint lo -> Temuan | Implikasi | Aksi inovasi (SKU, harga, ukuran) | Cara ukur
